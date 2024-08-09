@@ -1,0 +1,292 @@
+---
+title: "Breast milk Attachment - Demographics"
+author: "LJS"
+date: "2024-06-07"
+output: html_document
+---
+
+# Libraries 
+
+```{r setup, include=FALSE}
+
+library("rlang") #toolbox
+library("dplyr") #data manipulation
+library("here") #toolbox
+library("tidyverse") #data manipulation
+library("tidytext") #data manipulation
+library("knitr") #rmarkdown
+library("htmltools") #rmarkdown
+library("markdown") #rmarkdown
+library("httpuv") #rmarkdown
+library("vtable") #summary tables
+library("gtsummary") #summary tables
+library("NCmisc") #toolbox
+library("stringr") #data manipulation
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) #do not print warning messages
+
+```
+
+# Breast milk exposure during neonatal care and infant attachment
+
+Avoid scientific notation.
+
+```{r}
+
+options(scipen = 999)
+
+```
+
+## Section I: Prepare data
+
+### Merge individual spreadsheets
+
+```{r}
+
+BM_variables <- read.csv(here("raw_data", "IDs_BM.csv"), header=T, dec=".",sep=",")
+Attachment_variables <- read.csv(here("raw_data", "IDs_WT_rawtimes_filtered.csv"), header=T, dec=".",sep=",")
+Covariate_variables <- read.csv(here("raw_data", "IDs_covariates.csv"), header=T, dec=".",sep=",")
+TEA_feeding <- read.csv(here("raw_data", "IDs_TEA_feeding.csv"), header=T, dec=".",sep=",")
+
+Data <- merge(BM_variables, Attachment_variables, by="ID")
+Data <- merge(Covariate_variables, Data, by="ID")
+Data <- merge(TEA_feeding, Data, by="ID")
+rownames(Data) <- Data$ID
+Data$ID <- NULL
+
+```
+
+### Breast milk
+
+Calculate the % of exclusively mother breast milk, % of exclusively donor breast milk, % of both mother+donor breast milk and % of exclusively any (mother or donor) breast milk during neonatal care.
+
+```{r}
+
+Data <- Data %>% mutate(prop_days_excl_mother_breastmilk = (days_excl_mbm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_donor_breastmilk = (days_excl_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_motherdonor_breastmilk = (days_excl_mbm_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_any_breastmilk = (days_excl_mbm + days_excl_debm + days_excl_mbm_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_formula = (days_excl_formula)/days_nnu)
+Data <- Data %>% mutate(breastmilk_75_term = case_when((Prematurity==0)~2,
+(Prematurity==1 & prop_days_excl_any_breastmilk < 0.75)~0,
+(Prematurity==1 & prop_days_excl_any_breastmilk >= 0.75)~1))
+Data=Data[complete.cases(Data$breastmilk_75_term),]
+
+```
+
+### Attachment
+
+Categorise infants as secure or insecure based on attachment style. 
+Remove participants with an unscorable attachment style (n = 7).
+
+```{r}
+
+Data$AttachmentSecurity = "Secure"
+
+for(i in 1:nrow(Data)){
+  if(Data$AttachmentStyle[i]=="Avoidant"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="Resistant"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="Disorganised"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="NotFit"){
+    Data$AttachmentSecurity[i] <- "NotFit"}}
+
+Data = Data[Data$AttachmentSecurity=="Secure" | Data$AttachmentSecurity=="Insecure",]
+
+```
+
+### Transform variables to factors
+
+```{r}
+
+factor_columns <- c("breastmilk_75_term", "Sex", "Prematurity", "Exclusive_BF_4.5",
+                    "Postnatal_depression_4.5", "Early_onset_sepsis", 
+                    "Late_onset_sepsis", "Medical_or_surgical_nec", 
+                    "bronchopulmonary_dysplasia", "retinopathy_or_prematurity")
+
+for (col in factor_columns) {
+  Data[[col]] <- as.factor(Data[[col]])
+}
+
+```
+
+## Section II: Demographics of study sample
+
+### Compare % of exclusively mother, donor or combined breastmilk intake during neonatal care across breastmilk exposure groups
+
+```{r}
+
+Data_milktype <- Data[,grep("breastmilk_75_term|prop_days_excl_mother|prop_days_excl_donor", colnames(Data))]
+Data_milktype <- Data_milktype %>% filter(breastmilk_75_term %in% c("0", "1"))
+
+tbl_summary(
+  Data_milktype,
+  by = breastmilk_75_term,
+  label = NULL,
+  statistic = list(c("prop_days_excl_mother_breastmilk", "prop_days_excl_donor_breastmilk", "prop_days_excl_motherdonor_breastmilk") ~ c("{median} ({min}, {max})")),
+  digits = all_continuous()~3,
+  type = NULL,
+  value = NULL,
+  missing = NULL,
+  missing_text = NULL,
+  sort = NULL,
+  percent = NULL,
+  include = everything()
+)
+
+```
+
+# Breastmilk data distribution
+
+```{r}
+
+g <- ggplot(Data, aes(x = prop_days_excl_any_breastmilk)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(x = "Proportion of days in the NICU of exclusive\nbreast milk (mother- or donor- expressed)",
+       y = "Number of participants") +
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    axis.text = element_text(size = 12)
+  )
+
+g
+
+ggsave(here("results/figures", "Prop.NICUdays.exclusiveBM.pdf"), width = 130, height = 100, units = "mm", plot = g, dpi=300)
+
+```
+
+# Feeding type at neonatal visit
+
+```{r}
+
+Data_feeding <- Data[,grep("breastmilk_75_term|visit_", colnames(Data))]
+
+tbl_summary(
+  Data_feeding,
+  by = breastmilk_75_term,
+  label = NULL,
+ statistic = list(c("visit_CGA") ~ c("{mean} ({min}, {max})"), 
+                  all_categorical() ~ "{n} ({p}%)"),
+  digits = all_continuous()~3,
+  type = NULL,
+  value = NULL,
+  missing = NULL,
+  missing_text = NULL,
+  sort = NULL,
+  percent = NULL,
+  include = everything()
+)
+
+```
+
+# Caregivers
+
+```{r}
+
+Data_caregivers <- Data[,grep("breastmilk_75_term|Caregiver", colnames(Data))]
+
+tbl_summary(
+  Data_caregivers,
+  by = breastmilk_75_term,
+  label = NULL,
+  digits = all_continuous()~3,
+  type = NULL,
+  value = NULL,
+  missing = NULL,
+  missing_text = NULL,
+  sort = NULL,
+  percent = NULL,
+  include = everything()
+)
+
+```
+
+# Descriptive statistics
+
+```{r}
+
+# data wrangling 
+
+Data_baseline <- Data[,grep("Sex|GA|BW|breastmilk_75_term|SIMD|days_nnu|Eth|prop_days_excl_any_breastmilk|prop_days_formula|Early_onset_sepsis|Late_onset_sepsis|Medical_or_surgical_nec|bronchopulmonary_dysplasia|retinopathy_or_prematurity|Postnatal_depression_4.5|Exclusive_BF_4.5", colnames(Data))]
+
+Data_baseline <- Data_baseline[,-grep("visit_CGA", colnames(Data_baseline))]
+
+# create table 
+
+table_dem <- tbl_summary(
+  Data_baseline,
+  by = breastmilk_75_term,
+  label = NULL,
+ statistic = list(c("GA", "BW", "BW_zscore", "SIMD", "days_nnu") ~ c("{median} ({min}, {max})"), 
+                  all_categorical() ~ "{n} ({p}%)"),
+  digits = list(all_categorical()~2, all_continuous()~3),
+  type = NULL,
+  value = NULL,
+  missing = NULL,
+  missing_text = NULL,
+  sort = NULL,
+  percent = NULL,
+  include = everything()
+)
+
+table_dem 
+
+# export table 
+
+table_dem <- as_tibble(table_dem)
+colnames(table_dem) <- c("Characteristic", "Preterm with low BM (N = 28)", "Preterm with high BM (N = 49)", "Term (N = 71)")
+
+write.csv(table_dem, here("results/demographics", "Dem.table.csv"), row.names=FALSE)
+
+# comparisons between preterm infants with low vs high breast milk exposure during neonatal care
+
+## data wrangling 
+
+Data_baseline_pret = Data_baseline[Data_baseline$breastmilk_75_term=="0" | Data_baseline$breastmilk_75_term=="1",]
+Data_baseline_pret$breastmilk_75_term = factor(Data_baseline_pret$breastmilk_75_term)
+
+Pval_fun <- function(x) style_pvalue(x, digits = 3)
+Stat_fun <- function(x) style_sigfig(x, digits=3)
+
+## create table with comparisons
+
+table_dem_pret <- Data_baseline_pret %>%
+  tbl_summary(
+    by = breastmilk_75_term,
+    statistic = list(
+      c("GA", "BW", "BW_zscore", "SIMD", "days_nnu", "prop_days_excl_any_breastmilk", "prop_days_formula") ~ "{median} ({min}, {max})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = list(all_categorical()~2, all_continuous()~3)
+  ) %>%
+  add_p(
+    test = list(
+      c("GA", "BW", "BW_zscore", "SIMD", "days_nnu", "prop_days_excl_any_breastmilk", "prop_days_formula") ~ "wilcox.test",
+      all_categorical() ~ "chisq.test"
+    ),
+    pvalue_fun = Pval_fun
+  ) %>%
+  separate_p_footnotes() %>%
+  modify_header(list(statistic ~ "**t-statistic**", p.value ~ "**p-value**")) %>%
+  modify_fmt_fun(list(statistic ~ Stat_fun, p.value ~ Pval_fun))
+
+table_dem_pret
+
+## export table
+
+table_dem_pret <- as_tibble(table_dem_pret)
+colnames(table_dem_pret) <- c("Characteristic", "Preterm with low BM (N = 28)", "Preterm with high BM (N = 49)", "t-statistic", "p-value")
+
+write.csv(table_dem_pret, here("results/demographics", "Dem.table.preterm.csv"), row.names=FALSE)
+
+```
+
+
+```{r pressure, echo=FALSE}
+markdownToHTML("BM_Attachment_dem.Rmd",output ="BM_Attachment_dem.html")
+```
+

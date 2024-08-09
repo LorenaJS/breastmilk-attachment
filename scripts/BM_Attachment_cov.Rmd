@@ -1,0 +1,344 @@
+---
+title: "BM_Attachment_cov"
+author: "LJS"
+date: "2024-07-02"
+output: html_document
+---
+
+# Libraries 
+
+```{r}
+
+library("rlang") #toolbox
+library("dplyr") #data manipulation
+library("here") #toolbox
+library("tidyverse") #data manipulation
+library("tidytext") #data manipulation
+library("knitr") #rmarkdown
+library("htmltools") #rmarkdown
+library("markdown") #rmarkdown
+library("httpuv") #rmarkdown
+library("vtable") #summary tables
+library("gtsummary") #summary tables
+library("stringr") #data manipulation
+
+```
+
+# Breast milk exposure during neonatal care and infant attachment
+
+Avoid scientific notation.
+
+```{r}
+
+options(scipen = 999)
+
+```
+
+## Section I: Prepare data
+
+### Merge individual spreadsheets
+
+```{r}
+
+BM_variables <- read.csv(here("raw_data", "IDs_BM.csv"), header=T, dec=".",sep=",")
+Attachment_variables <- read.csv(here("raw_data", "IDs_WT_rawtimes_filtered.csv"), header=T, dec=".",sep=",")
+Covariate_variables <- read.csv(here("raw_data", "IDs_covariates.csv"), header=T, dec=".",sep=",")
+TEA_feeding <- read.csv(here("raw_data", "IDs_TEA_feeding.csv"), header=T, dec=".",sep=",")
+
+Data <- merge(BM_variables, Attachment_variables, by="ID")
+Data <- merge(Covariate_variables, Data, by="ID")
+Data <- merge(TEA_feeding, Data, by="ID")
+rownames(Data) <- Data$ID
+Data$ID <- NULL
+
+```
+
+### Breast milk
+
+Calculate the % of exclusively mother breast milk, % of exclusively donor breast milk, % of both mother+donor breast milk and % of exclusively any (mother or donor) breast milk during neonatal care.
+
+```{r}
+
+Data <- Data %>% mutate(prop_days_excl_mother_breastmilk = (days_excl_mbm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_donor_breastmilk = (days_excl_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_motherdonor_breastmilk = (days_excl_mbm_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_any_breastmilk = (days_excl_mbm + days_excl_debm + days_excl_mbm_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_formula = (days_excl_formula)/days_nnu)
+Data <- Data %>% mutate(breastmilk_75_term = case_when((Prematurity==0)~2,
+(Prematurity==1 & prop_days_excl_any_breastmilk < 0.75)~0,
+(Prematurity==1 & prop_days_excl_any_breastmilk >= 0.75)~1))
+Data=Data[complete.cases(Data$breastmilk_75_term),]
+
+```
+
+### Attachment
+
+Categorise infants as secure or insecure based on attachment style. 
+Remove participants with an unscorable attachment style (n = 7).
+
+```{r}
+
+Data$AttachmentSecurity = "Secure"
+
+for(i in 1:nrow(Data)){
+  if(Data$AttachmentStyle[i]=="Avoidant"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="Resistant"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="Disorganised"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="NotFit"){
+    Data$AttachmentSecurity[i] <- "NotFit"}}
+
+Data = Data[Data$AttachmentSecurity=="Secure" | Data$AttachmentSecurity=="Insecure",]
+
+```
+
+### Transform variables to factors
+
+```{r}
+
+factor_columns <- c("breastmilk_75_term", "Sex", "Prematurity", "Exclusive_BF_4.5",
+                    "Postnatal_depression_4.5", "Early_onset_sepsis", 
+                    "Late_onset_sepsis", "Medical_or_surgical_nec", 
+                    "bronchopulmonary_dysplasia", "retinopathy_or_prematurity")
+
+for (col in factor_columns) {
+  Data[[col]] <- as.factor(Data[[col]])
+}
+
+```
+
+## Section II: Covariate analyses for attachment behaviours
+
+### Categorical variables - bronchopulmonary dysplasia
+
+```{r}
+
+# data wrangling
+
+Data_pret = Data[Data$breastmilk_75_term=="0" | Data$breastmilk_75_term=="1",]
+Data_pret$breastmilk_75_term = factor(Data_pret$breastmilk_75_term)
+
+# check data distribution 
+
+targetdata=Data_pret[,grep('HD_Raw|FNF_Raw|AA_Raw', colnames(Data_pret))]
+targetdata=as.data.frame(targetdata)
+apply(targetdata,2,shapiro.test)
+
+for (cols in colnames(targetdata)) {
+  targetdata %>% pull(cols) %>% hist(main = cols)
+}
+
+for (cols in colnames(targetdata)) {
+  targetdata %>% pull(cols) %>% qqnorm(main = cols)
+}
+
+```
+
+In preterm infants, the Happy-Distressed scale is normally distributed, while the Not fretful-Fretful and Attentive-Avoidant scales are non-normally distributed.
+
+Display tables of descriptive statistics and tests by confounder.
+
+```{r}
+
+Pval_fun <- function(x) style_pvalue(x, digits = 3)
+Stat_fun <- function(x) style_sigfig(x, digits=3)
+
+```
+
+Associations between bronchopulmonary dysplasia and attachment behaviours.
+
+```{r}
+
+# data wrangling 
+
+targetdata=Data_pret[,grep('broncho|HD_Raw|FNF_Raw|AA_Raw', colnames(Data_pret))]
+
+# create table 
+
+table_cov <- targetdata %>% tbl_summary(by = bronchopulmonary_dysplasia,
+  label = NULL,
+  statistic = list(c("FNF_Raw", "AA_Raw") ~ c("{median} ({min}, {max})"), c("HD_Raw") ~ c("{mean} ({sd})"), all_categorical() ~ "{n} ({p}%)"),
+  digits = everything()~3) %>% 
+  add_p(
+  test = list(c("FNF_Raw", "AA_Raw") ~ "wilcox.test",
+                   c("HD_Raw") ~ "t.test", all_categorical() ~ "chisq.test"),
+  pvalue_fun = Pval_fun) %>% 
+  separate_p_footnotes() %>% 
+  modify_header(
+    list(
+      statistic ~ "**t-statistic**",
+      p.value ~ "**p-value**"
+    )
+  ) %>%
+  modify_fmt_fun(
+    list(
+      statistic ~ Stat_fun,
+      p.value ~ Pval_fun
+    ))
+
+# export table
+
+corr_cat_attachbeh <- table_cov
+corr_cat_attachbeh <- as_tibble(corr_cat_attachbeh)
+colnames(corr_cat_attachbeh) <- c("Characteristic", "Absence of BPD", "Presence of BPD", "t-statistic", "p-value")
+
+write.csv(corr_cat_attachbeh, here("results/covariates", "AttachBeh.cat.csv"), row.names=FALSE)
+
+```
+
+### Continuous variables - BW, GA, SIMD, days in neonatal care (days_nnu)
+
+```{r}
+
+# check data distribution 
+
+targetdata=Data_pret[,grep('BW|GA|SIMD|days_nnu', colnames(Data_pret))]
+targetdata=targetdata[,-grep('visit_|BW_zscore', colnames(targetdata))]
+targetdata=as.data.frame(targetdata)
+apply(targetdata,2,shapiro.test)
+
+for (cols in colnames(targetdata)) {
+  targetdata %>% pull(cols) %>% hist(main = cols)
+}
+
+for (cols in colnames(targetdata)) {
+  targetdata %>% pull(cols) %>% qqnorm(main = cols)
+}
+
+```
+
+In preterm infants, BW is normally distributed, while gestational age at birth (GA), socioeconomic status (SIMD), and days in neonatal care (days_nnu) are non-normally distributed.
+
+Associations between demographic/clinical variables and attachment behaviours.
+
+```{r}
+
+# spearman correlations
+
+targetdata=Data_pret[,grep('BW|GA|SIMD|days_nnu|HD_|FNF_|AA_', colnames(Data_pret))]
+targetdata=targetdata[,-grep('visit_|BW_zscore', colnames(targetdata))]
+
+cors <- function(df) { 
+  # turn all three matrices (r, n, and P into a data frame)
+  M <- Hmisc::rcorr(as.matrix(df), type="spearman")
+  # return the three data frames in a list return(Mdf)
+  Mdf <- map(M, ~data.frame(.x))
+}
+
+newdata <- cors(targetdata)
+
+formatted_cors <- function(df){
+  cors(df) %>%
+    map(~rownames_to_column(.x, var="measure1")) %>%
+    map(~pivot_longer(.x, -measure1, names_to="measure2")) %>% 
+    bind_rows(.id = "id") %>%
+    tidyr::pivot_wider(names_from = id, values_from = value) %>%
+    mutate(sig_label = case_when(
+      P<0.05 & P>0.01 ~ "*", 
+      P<0.01 & P>0.001 ~ "**", 
+      P<0.001 ~ "***",
+      TRUE ~ " "))}
+
+data_spearman <- formatted_cors(targetdata)
+
+data_spearman = as.data.frame(data_spearman)
+
+colnames(data_spearman) = c("Y", "X", "Estimate", "N", "P_value", "sig_label")
+
+data_spearman <- data_spearman %>% filter(Y == "GA" | Y == "BW" |  Y == "SIMD" | Y == "days_nnu")
+
+data_spearman <- data_spearman %>% filter(X == "HD_Raw" | X == "FNF_Raw" |  X == "AA_Raw")
+
+data_spearman <- data_spearman[-7,] #delete the correlation between BW and HD scale (run using Pearson because of data distribution, see below)
+
+# pearson correlations
+
+targetdata=Data_pret[,grep('BW|HD_', colnames(Data_pret))]
+targetdata=targetdata[,-grep('BW_zscore', colnames(targetdata))]
+
+cors <- function(df) { 
+  # turn all three matrices (r, n, and P into a data frame)
+  M <- Hmisc::rcorr(as.matrix(df), type="pearson")
+  # return the three data frames in a list return(Mdf)
+  Mdf <- map(M, ~data.frame(.x))
+}
+
+formatted_cors <- function(df){
+  cors(df) %>%
+    map(~rownames_to_column(.x, var="measure1")) %>%
+    map(~pivot_longer(.x, -measure1, names_to="measure2")) %>% 
+    bind_rows(.id = "id") %>%
+    pivot_wider(names_from = id, values_from = value) %>%
+    mutate(sig_label = case_when(
+      P<0.05 & P>0.01 ~ "*", 
+      P<0.01 & P>0.001 ~ "**", 
+      P<0.001 ~ "***",
+      TRUE ~ " "))}
+
+data_pearson <- formatted_cors(targetdata)
+
+data_pearson = as.data.frame(data_pearson)
+
+colnames(data_pearson) = c("Y", "X", "Estimate", "N", "P_value", "sig_label")
+
+data_pearson <- data_pearson %>% filter(Y == "BW")
+
+data_pearson <- data_pearson %>% filter(X == "HD_Raw" )
+
+# data wrangling and export
+
+corr_cont_attachbeh <- rbind(data_spearman, data_pearson)
+
+kable(corr_cont_attachbeh, col.names = gsub("[.]", " ", names(corr_cont_attachbeh)))
+
+write.csv(corr_cont_attachbeh, here("results/covariates", "AttachBeh.cont.csv"), row.names = FALSE)
+
+```
+
+## Section III: Covariate analyses for secure vs insecure attachment classification
+
+### Categorical and continuous variables
+
+```{r}
+
+# data wrangling
+
+targetdata=Data_pret[,grep('AttachmentSecurity|BW|GA|SIMD|days_nnu|broncho', colnames(Data_pret))]
+targetdata=targetdata[,-grep('BW_zscore|visit', colnames(targetdata))]
+
+Pval_fun <- function(x) style_pvalue(x, digits = 3)
+Stat_fun <- function(x) style_sigfig(x, digits=3)
+
+# create table with comparisons
+
+corr_attachclass <- targetdata %>%
+  tbl_summary(
+    by = AttachmentSecurity,
+    statistic = list(c("GA", "SIMD", "days_nnu") ~ c("{median} ({min}, {max})"), c("BW") ~ c("{mean} ({sd})"), all_categorical() ~ "{n} ({p}%)"),
+    digits = list(all_categorical()~2, all_continuous()~3)
+  ) %>%
+  add_p(
+    test = list(c("GA", "SIMD", "days_nnu") ~ "wilcox.test", c("BW") ~ "t.test", all_categorical() ~ "chisq.test"),
+    pvalue_fun = Pval_fun
+  ) %>%
+  separate_p_footnotes() %>%
+  modify_header(list(statistic ~ "**t-statistic**", p.value ~ "**p-value**")) %>%
+  modify_fmt_fun(list(statistic ~ Stat_fun, p.value ~ Pval_fun))
+
+corr_attachclass
+
+corr_attachclass <- as_tibble(corr_attachclass)
+
+colnames(corr_attachclass) <- c("Characteristic", "Insecure attachment", "Secure attachment", "t-statistic", "p-value")
+
+write.csv(corr_attachclass, here("results/covariates", "AttachClass.cat.cont.csv"), row.names=FALSE)
+
+```
+
+
+```{r pressure, echo=FALSE}
+markdownToHTML("BM_Attachment_cov.Rmd",output ="BM_Attachment_cov.html")
+```
+

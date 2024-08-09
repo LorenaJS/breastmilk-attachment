@@ -1,0 +1,247 @@
+---
+title: "BM_Attachment_sens"
+author: "LJS"
+date: "2024-07-01"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Libraries 
+
+```{r}
+
+library("rlang") #toolbox
+library("dplyr") #data manipulation
+library("here") #toolbox
+library("tidyverse") #data manipulation
+library("tidytext") #data manipulation
+library("knitr") #rmarkdown
+library("htmltools") #rmarkdown
+library("markdown") #rmarkdown
+library("httpuv") #rmarkdown
+library("vtable") #summary tables
+library("gtsummary") #summary tables
+library("stringr") #data manipulation
+library("car") #levene tests, qqplot
+library("rstatix") #kruskal_effsize, wilcox_effsize
+library("nnet") #multinom
+library("ggplot2") #plotting
+library("performance") #check models performance
+library("easystats") #check models performance
+library("see") #check models performance
+
+```
+
+# Breast milk exposure during neonatal care and infant attachment
+
+Avoid scientific notation.
+
+```{r}
+
+options(scipen = 999)
+
+```
+
+## Section I: Prepare data
+
+### Merge individual spreadsheets
+
+```{r}
+
+BM_variables <- read.csv(here("raw_data", "IDs_BM.csv"), header=T, dec=".",sep=",")
+Attachment_variables <- read.csv(here("raw_data", "IDs_WT_rawtimes_filtered.csv"), header=T, dec=".",sep=",")
+Covariate_variables <- read.csv(here("raw_data", "IDs_covariates.csv"), header=T, dec=".",sep=",")
+TEA_feeding <- read.csv(here("raw_data", "IDs_TEA_feeding.csv"), header=T, dec=".",sep=",")
+
+Data <- merge(BM_variables, Attachment_variables, by="ID")
+Data <- merge(Covariate_variables, Data, by="ID")
+Data <- merge(TEA_feeding, Data, by="ID")
+rownames(Data) <- Data$ID
+Data$ID <- NULL
+
+```
+
+### Breast milk
+
+Calculate the % of exclusively mother breast milk, % of exclusively donor breast milk, % of both mother+donor breast milk and % of exclusively any (mother or donor) breast milk during neonatal care.
+
+```{r}
+
+Data <- Data %>% mutate(prop_days_excl_mother_breastmilk = (days_excl_mbm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_donor_breastmilk = (days_excl_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_motherdonor_breastmilk = (days_excl_mbm_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_excl_any_breastmilk = (days_excl_mbm + days_excl_debm + days_excl_mbm_debm)/days_nnu)
+Data <- Data %>% mutate(prop_days_formula = (days_excl_formula)/days_nnu)
+Data <- Data %>% mutate(breastmilk_75_term = case_when((Prematurity==0)~2,
+(Prematurity==1 & prop_days_excl_any_breastmilk < 0.75)~0,
+(Prematurity==1 & prop_days_excl_any_breastmilk >= 0.75)~1))
+Data=Data[complete.cases(Data$breastmilk_75_term),]
+
+```
+
+### Attachment
+
+Categorise infants as secure or insecure based on attachment style. 
+Remove participants with an unscorable attachment style (n = 7).
+
+```{r}
+
+Data$AttachmentSecurity = "Secure"
+
+for(i in 1:nrow(Data)){
+  if(Data$AttachmentStyle[i]=="Avoidant"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="Resistant"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="Disorganised"){
+    Data$AttachmentSecurity[i] <- "Insecure"}
+  if(Data$AttachmentStyle[i]=="NotFit"){
+    Data$AttachmentSecurity[i] <- "NotFit"}}
+
+Data = Data[Data$AttachmentSecurity=="Secure" | Data$AttachmentSecurity=="Insecure",]
+
+```
+
+### Transform variables to factors
+
+```{r}
+
+factor_columns <- c("breastmilk_75_term", "Sex", "Prematurity", "Exclusive_BF_4.5",
+                    "Postnatal_depression_4.5", "Early_onset_sepsis", 
+                    "Late_onset_sepsis", "Medical_or_surgical_nec", 
+                    "bronchopulmonary_dysplasia", "retinopathy_or_prematurity")
+
+for (col in factor_columns) {
+  Data[[col]] <- as.factor(Data[[col]])
+}
+
+```
+
+## Section II: Analyses of attachment behaviours controlling for bronchopulmonary dysplasia
+
+```{r}
+
+Data_pret = Data[Data$breastmilk_75_term=="0" | Data$breastmilk_75_term=="1",]
+Data_pret$breastmilk_75_term <- as.factor(Data_pret$breastmilk_75_term)
+
+```
+
+### Make a dataframe for results
+
+```{r}
+
+results_table <- data.frame(matrix(ncol = 4, nrow = 4))
+x <- c("measure", "effsize", "SE", "p-value")
+colnames(results_table) <- x
+
+results_table$measure <- c("HD_Raw", "FNF_Raw", "AA_Raw", "Secure/Insecure")
+
+```
+
+### Breast milk exposure ~ behavioural scales
+
+Run models and create table with results.
+
+```{r}
+
+Data_pret[,grep('HD_Raw|FNF_Raw|AA_Raw', colnames(Data_pret))] <- scale(Data_pret[,grep('HD_Raw|FNF_Raw|AA_Raw', colnames(Data_pret))])
+
+targetdata=Data_pret
+colns_oi = colnames(targetdata)[grep('HD|FNF|AA',colnames(targetdata))]
+
+for(i in colns_oi){
+  formula.torun = paste0(i, '~bronchopulmonary_dysplasia+breastmilk_75_term')
+  fit=lm(as.formula(formula.torun),data=targetdata) 
+  report=summary(fit)
+  single.model=report$coefficients[nrow(report$coefficients),]
+  
+  if (i==colns_oi[1]){
+    total.report=single.model
+  }else{
+    total.report=rbind(total.report,single.model)
+  }
+  
+}
+
+rownames(total.report)=colns_oi
+Total.report.beh = data.frame(total.report)
+colnames(Total.report.beh) <- c("Beta", "SE", "t-value", "p-value")
+Total.report.beh$Behaviour <- rownames(Total.report.beh)
+rownames(Total.report.beh) <- NULL
+new_order = c("Behaviour","Beta", "SE", "t-value", "p-value")
+Total.report.beh <- Total.report.beh[, new_order]
+Results.report <- Total.report.beh
+
+results_table$`effsize`[which(results_table$measure=="HD_Raw")] <- Results.report$Beta[which(Results.report$Behaviour=="HD_Raw")]
+results_table$SE[which(results_table$measure=="HD_Raw")] <- Results.report$SE[which(Results.report$Behaviour=="HD_Raw")]
+results_table$"p-value"[which(results_table$measure=="HD_Raw")] <- Results.report$"p-value"[which(Results.report$Behaviour=="HD_Raw")]
+
+results_table$`effsize`[which(results_table$measure=="FNF_Raw")] <- Results.report$Beta[which(Results.report$Behaviour=="FNF_Raw")]
+results_table$SE[which(results_table$measure=="FNF_Raw")] <- Results.report$SE[which(Results.report$Behaviour=="FNF_Raw")]
+results_table$"p-value"[which(results_table$measure=="FNF_Raw")] <- Results.report$"p-value"[which(Results.report$Behaviour=="FNF_Raw")]
+
+results_table$`effsize`[which(results_table$measure=="AA_Raw")] <- Results.report$Beta[which(Results.report$Behaviour=="AA_Raw")]
+results_table$SE[which(results_table$measure=="AA_Raw")] <- Results.report$SE[which(Results.report$Behaviour=="AA_Raw")]
+results_table$"p-value"[which(results_table$measure=="AA_Raw")] <- Results.report$"p-value"[which(Results.report$Behaviour=="AA_Raw")]
+
+```
+
+Model diagnostics for Breast milk exposure ~ behavioural scales
+
+```{r}
+
+model_list=list()
+for(i in colns_oi){
+  formula.torun = paste0(i, '~bronchopulmonary_dysplasia+breastmilk_75_term')
+  fit=lm(as.formula(formula.torun),data=targetdata)
+  model_list[[i]]=fit}
+
+lapply(model_list, check_model)
+
+#Double-check normality of residuals with Q-Q plots
+for (i in model_list) {
+  plot(i, which=2)}
+
+```
+
+## Section III: Analyses of secure vs insecure attachment classification controlling for bronchopulmonary dysplasia
+
+```{r}
+
+Data_pret$breastmilk_75_term2 <- relevel(factor(Data_pret$breastmilk_75_term), ref="0")
+Data_pret$AttachmentSecurity2 <- relevel(factor(Data_pret$AttachmentSecurity), ref="Insecure")
+
+multinom_test <- multinom(AttachmentSecurity2 ~ breastmilk_75_term2, data = Data_pret)
+summary(multinom_test)
+z <- summary(multinom_test)$coefficients/summary(multinom_test)$standard.errors
+z
+p <- (1 - pnorm(abs(z), 0, 1)) * 2
+p
+exp(coef(multinom_test))
+
+# Main p-values to be corrected for analyses of attachment behaviours and secure vs insecure attachment classification are labelled "pval_1_" .
+
+
+results_table$`effsize`[which(results_table$measure=="Secure/Insecure")] <- summary(multinom_test)$coefficients[2]
+results_table$SE[which(results_table$measure=="Secure/Insecure")] <- summary(multinom_test)$standard.errors[2]
+results_table$"p-value"[which(results_table$measure=="Secure/Insecure")] <- p[2]
+
+```
+
+## Section IV: P-value adjustment and save results
+
+```{r}
+
+write.csv(results_table, here("results/comparisons", "Comp.3group.unadj.sens.csv"), row.names = FALSE)
+
+results_table_adjusted = results_table%>%mutate(across(contains("p-value"),~ p.adjust(.x, method = "BH", n = 4)))
+write.csv(results_table_adjusted, here("results/comparisons", "Comp.3group.adj.sens.csv"), row.names = FALSE)
+
+```
+
+
+```{r pressure, echo=FALSE}
+markdownToHTML("BM_Attachment_sens.Rmd",output ="BM_Attachment_sens.html")
+```
+
