@@ -4,6 +4,9 @@ Code to reproduce the analyses presented in: "Preterm infant attachment is indep
 
 Repository author: Lorena Jiménez Sánchez (lorena.jimenezs@ed.ac.uk).
 
+This repository has been deposited on OSF (17/10/2024), DOI: 10.17605/OSF.IO/ECVDY
+
+
 # Directory structure
 
 The project assumes the following file directory system:
