@@ -1,6 +1,8 @@
 # Breast milk exposure and preterm infant attachment
 
-Code to reproduce the analyses presented in: "Preterm infant attachment is independent of breast milk intake during neonatal care".
+This repository contains the code used to reproduce the analyses from the study:
+
+"Preterm infant attachment is independent of breast milk intake during neonatal care" Jiménez-Sánchez, L., Vaher, K., Ginnell, L., Corrigan, A., McKinnon, K., Sullivan, G., ... & Fletcher-Watson, S. (2024). Wellcome Open Research, 9, 629. Accessible at: https://wellcomeopenresearch.org/articles/9-629
 
 Repository author: Lorena Jiménez Sánchez (lorena.jimenezs@ed.ac.uk).
 
